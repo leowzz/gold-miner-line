@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod capture;
 mod config;
+mod tracking;
 use config::{Bounds, Config, Settings, SettingsPatch};
+use goldline::vision;
 use serde::Serialize;
 use std::{
     path::PathBuf,
@@ -20,6 +23,8 @@ struct Snapshot {
     revision: u64,
     notice: Option<String>,
     save_error: Option<String>,
+    tracking: vision::Options,
+    tracking_enabled: bool,
 }
 
 struct Inner {
@@ -34,6 +39,7 @@ struct Model {
 
 fn publish(app: &tauri::AppHandle, inner: &mut Inner) -> Snapshot {
     inner.snapshot.settings = inner.config.settings.clone();
+    inner.snapshot.tracking = inner.config.tracking.clone();
     inner.snapshot.revision += 1;
     let snapshot = inner.snapshot.clone();
     let _ = app.emit("state-changed", &snapshot);
@@ -43,6 +49,27 @@ fn publish(app: &tauri::AppHandle, inner: &mut Inner) -> Snapshot {
 #[tauri::command]
 fn get_state(model: tauri::State<Model>) -> Snapshot {
     model.inner.lock().unwrap().snapshot.clone()
+}
+
+#[tauri::command]
+fn set_tracking(
+    app: tauri::AppHandle,
+    model: tauri::State<Model>,
+    enabled: Option<bool>,
+    options: Option<vision::OptionsPatch>,
+) -> Result<Snapshot, String> {
+    if enabled == Some(true) {
+        capture::request_permission();
+    }
+    let mut inner = model.inner.lock().unwrap();
+    if let Some(options) = options {
+        inner.config.tracking = options.apply(&inner.config.tracking)?;
+        inner.dirty = Some(Instant::now());
+    }
+    if let Some(enabled) = enabled {
+        inner.snapshot.tracking_enabled = enabled;
+    }
+    Ok(publish(&app, &mut inner))
 }
 
 #[tauri::command]
@@ -61,6 +88,7 @@ fn update_settings(
 fn reset_settings(app: tauri::AppHandle, model: tauri::State<Model>) -> Snapshot {
     let mut inner = model.inner.lock().unwrap();
     inner.config.settings = Settings::default();
+    inner.config.tracking = vision::Options::default();
     inner.dirty = Some(Instant::now());
     publish(&app, &mut inner)
 }
@@ -155,6 +183,7 @@ fn capture_bounds(window: &tauri::Window) {
             height: logical.height,
         });
         inner.dirty = Some(Instant::now());
+        publish(window.app_handle(), &mut inner);
     }
 }
 
@@ -223,6 +252,8 @@ fn main() {
                 revision: 0,
                 notice,
                 save_error: None,
+                tracking: config.tracking.clone(),
+                tracking_enabled: false,
             };
             let saved_bounds = config.bounds.clone();
             app.manage(Model {
@@ -302,6 +333,7 @@ fn main() {
                 }
             }
             let handle = app.handle().clone();
+            tracking::start(handle.clone());
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(250));
                 flush(&handle, false);
@@ -331,7 +363,8 @@ fn main() {
             update_settings,
             reset_settings,
             set_mode,
-            recover_overlay
+            recover_overlay,
+            set_tracking
         ])
         .build(tauri::generate_context!())
         .expect("无法启动黄金矿工辅助线");

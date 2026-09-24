@@ -13,6 +13,7 @@ tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 tempfile = "3"
+xcap = "0.9.8"
 
 [profile.release]
 lto = true

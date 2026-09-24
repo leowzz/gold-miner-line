@@ -109,6 +109,7 @@ pub struct Bounds {
 pub struct Config {
     pub settings: Settings,
     pub bounds: Option<Bounds>,
+    pub tracking: crate::vision::Options,
 }
 
 pub fn load(path: &Path) -> Result<Config, String> {
@@ -118,6 +119,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let config: Config = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
     config.settings.validate()?;
+    config.tracking.validate()?;
     if config
         .bounds
         .as_ref()
@@ -164,6 +166,12 @@ mod tests {
         let mut c = Config::default();
         save(&path, &c).unwrap();
         c.settings.count = 13;
+        c.tracking.region = crate::vision::Region {
+            x: 0.42,
+            y: 0.11,
+            width: 0.09,
+            height: 0.07,
+        };
         c.bounds = Some(Bounds {
             x: -1000,
             y: 40,
@@ -213,5 +221,21 @@ mod tests {
                 height: 720.0
             }
         );
+    }
+
+    #[test]
+    fn existing_config_without_tracking_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.yaml");
+        fs::write(&path, "settings:\n  count: 11\nbounds: null\n").unwrap();
+        let config = load(&path).unwrap();
+        assert_eq!(config.settings.count, 11);
+        assert_eq!(config.tracking, crate::vision::Options::default());
+        fs::write(&path, "settings:\n  originX: 0.481\n  originY: 0.129\ntracking:\n  skipRadius: 3\n  searchRadius: 18\n  darkness: 100\n").unwrap();
+        let config = load(&path).unwrap();
+        assert_eq!(config.settings.origin_x, 0.481);
+        assert_eq!(config.settings.origin_y, 0.129);
+        assert_eq!(config.tracking.darkness, 100.0);
+        assert_eq!(config.tracking.region, crate::vision::Region::default());
     }
 }
