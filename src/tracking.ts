@@ -1,5 +1,5 @@
 export interface Region { x: number; y: number; width: number; height: number }
-export interface TrackingOptions { region: Region; darkness: number; showReference: boolean }
+export interface TrackingOptions { region: Region; colorTolerance: number; showReference: boolean }
 export interface TrackingUpdate { revision: number; angle: number | null; origin: { x: number; y: number } | null; confidence: number; message: string; capturedAt: number }
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -35,4 +35,28 @@ export function activeTracking(
     || update.revision !== state.revision || now - update.capturedAt > 300
     || update.capturedAt > now + 100) return null;
   return update;
+}
+
+export interface Detection {
+  angle: number; confidence: number;
+  start: { x: number; y: number }; end: { x: number; y: number };
+  jawLeft: { x: number; y: number }; jawRight: { x: number; y: number };
+}
+export interface PreviewFrame {
+  width: number; height: number; image: string; contours: string;
+  detection: Detection | null; componentCount: number; candidateCount: number;
+  grayPixels: number; processingMs: number;
+}
+export interface PreviewUpdate {
+  revision: number; capturedAt: number;
+  status: 'invalid' | 'noMetal' | 'noMatch' | 'ambiguous' | 'detected' | 'confirming' | 'captureError' | 'previewError' | 'slow';
+  message: string; frame: PreviewFrame | null;
+}
+export function activePreview(
+  state: { trackingEnabled: boolean; visible: boolean; revision: number } | null,
+  update: PreviewUpdate | null, now: number,
+): { update: PreviewUpdate; stale: boolean } | null {
+  if (!state?.trackingEnabled || !state.visible || !update || state.revision !== update.revision || update.capturedAt > now + 100) return null;
+  // Keep the last diagnostic image explicitly marked stale, without annotations.
+  return { update, stale: now - update.capturedAt > 1500 };
 }

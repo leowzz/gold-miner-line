@@ -4,8 +4,10 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { normalizedPoint, rays, type Settings } from './geometry';
-import { activeTracking, adjustRegion, type Region, type TrackingOptions, type TrackingUpdate } from './tracking';
+import { activeTracking, activePreview, adjustRegion, type PreviewUpdate, type Region, type TrackingOptions, type TrackingUpdate } from './tracking';
+import { RecognitionPreview } from './RecognitionPreview';
 import { DetectionRegion } from './DetectionRegion';
+import { useOverlayInput } from './useOverlayInput';
 import './styles.css';
 
 interface Snapshot {
@@ -26,6 +28,8 @@ function useModel() {
   const [state, setState] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tracking, setTracking] = useState<TrackingUpdate | null>(null);
+  const [preview, setPreview] = useState<PreviewUpdate | null>(null);
+  const [, refreshPreview] = useState(0);
   const revision = useRef(-1);
   const queue = useRef(Promise.resolve());
   const accept = (next: Snapshot) => {
@@ -42,6 +46,9 @@ function useModel() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let untrack: (() => void) | undefined;
+    let unpreview: (() => void) | undefined;
+    let previewTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastPreviewRevision = -1, lastPreviewTime = -1;
     let staleTimer: ReturnType<typeof setTimeout> | undefined;
     void (async () => {
       unlisten = await listen<Snapshot>('state-changed', event => { if (!disposed) accept(event.payload); });
@@ -53,10 +60,21 @@ function useModel() {
         staleTimer = setTimeout(() => setTracking(null), Math.max(0, 300 - (Date.now() - event.payload.capturedAt)));
       });
       if (disposed) { untrack(); return; }
+      if (!isOverlay) {
+        unpreview = await listen<PreviewUpdate>('preview-updated', event => {
+          const next = event.payload;
+          if (disposed || next.revision < lastPreviewRevision || (next.revision === lastPreviewRevision && next.capturedAt < lastPreviewTime)) return;
+          lastPreviewRevision = next.revision; lastPreviewTime = next.capturedAt;
+          clearTimeout(previewTimer);
+          setPreview(next);
+          previewTimer = setTimeout(() => refreshPreview(n => n + 1), Math.max(0, 1501 - (Date.now() - next.capturedAt)));
+        });
+        if (disposed) { unpreview(); return; }
+      }
       const initial = await invoke<Snapshot>('get_state');
       if (!disposed) accept(initial);
     })().catch(e => { if (!disposed) setError(String(e)); });
-    return () => { disposed = true; unlisten?.(); untrack?.(); clearTimeout(staleTimer); };
+    return () => { disposed = true; unlisten?.(); untrack?.(); unpreview?.(); clearTimeout(staleTimer); clearTimeout(previewTimer); };
   }, []);
   const command = (name: string, args?: Record<string, unknown>) => {
     queue.current = queue.current.then(async () => {
@@ -68,7 +86,7 @@ function useModel() {
   };
   const patch = (value: Partial<Settings>) => command('update_settings', { patch: value });
   const currentTracking = activeTracking(state, tracking, Date.now());
-  return { state, error, command, patch, setError, tracking: currentTracking };
+  return { state, error, command, patch, setError, tracking: currentTracking, preview: activePreview(state, preview, Date.now()) };
 }
 
 type Model = ReturnType<typeof useModel>;
@@ -106,10 +124,10 @@ function Fan({ settings, width, height, preview = false, tracking = null, hole =
 }) {
   const live = tracking?.angle == null || !tracking.origin ? null : rays({ ...settings, originX: tracking.origin.x, originY: tracking.origin.y, count: 1, rotation: tracking.angle }, width, height)[0];
   return <svg className="fan" width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-    <defs><mask id="rope-clear-area" maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={height}><rect width={width} height={height} fill="white" />
+    <defs><mask id="claw-clear-area" maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={height}><rect width={width} height={height} fill="white" />
       {hole && <rect x={hole.x * width - 4} y={hole.y * height - 4} width={hole.width * width + 8} height={hole.height * height + 8} fill="black" />}
     </mask></defs>
-    <g mask="url(#rope-clear-area)">
+    <g mask="url(#claw-clear-area)">
     {showReference && rays(settings, width, height).map((line, i) => <line key={i} x1={line.x} y1={line.y} x2={line.endX} y2={line.endY}
       stroke={settings.color} strokeWidth={preview ? (line.central ? 1.6 : .8) : settings.width * (line.central ? 1.4 : 1)}
       opacity={Math.min(1, settings.opacity * (line.central ? 1.25 : 1))} />)}
@@ -127,21 +145,21 @@ function Panel({ model }: { model: Model }) {
   const s = state.settings;
   const options = state.tracking;
   const updateTracking = (next: Partial<TrackingOptions>) => command('set_tracking', { options: next });
-  const trackingMessage = !state.trackingEnabled ? '识别卷线轮与钩子之间的深色短线。'
-    : state.calibrating ? '移动并缩放黄色识别框，框住短线可能经过的区域，然后锁定。'
-    : !state.visible ? '辅助窗口已隐藏，识别暂停。' : tracking?.message || '正在等待短线画面…';
+  const trackingMessage = !state.trackingEnabled ? '识别张开的夹子，绘制夹口两端连线的中垂线。'
+    : state.calibrating ? '移动并缩放黄色识别框，框住整个夹子的摆动范围，然后锁定。'
+    : !state.visible ? '辅助窗口已隐藏，识别暂停。' : tracking?.message || '正在等待夹子画面…';
   return <main className="panel">
     <header className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-3"><div className="brand-mark" aria-hidden="true">⌁</div><div><h1>黄金矿工辅助线</h1><p className="subtitle">对齐轴心，把握出钩方向</p></div></div>
       <span className={`status ${state.visible ? 'active' : ''}`}><i />{!state.visible ? '已隐藏' : state.calibrating ? '校准中' : '已锁定'}</span>
     </header>
 
-    <section className="preview" aria-label="辅助线预览">
+    {state.trackingEnabled ? <RecognitionPreview preview={model.preview} visible={state.visible} calibrating={state.calibrating} /> : <section className="preview" aria-label="辅助线预览">
       <div className="preview-ground" />
       <Fan settings={s} width={360} height={150} preview tracking={tracking} showReference={!state.trackingEnabled || options.showReference} />
-      <span className="preview-label">实时预览</span>
+      <span className="preview-label">参考线预览</span>
       <span className="preview-meta">{state.trackingEnabled ? tracking?.angle != null ? `${tracking.angle.toFixed(1)}°` : '等待方向' : `${s.count} 条 · ${s.spread}°`}</span>
-    </section>
+    </section>}
 
     <div className="actions grid grid-cols-2 gap-2">
       <button className="primary" onClick={() => command('set_mode', { calibrating: !state.calibrating, visible: true })}>
@@ -149,7 +167,7 @@ function Panel({ model }: { model: Model }) {
       </button>
       <button onClick={() => command('set_mode', { visible: !state.visible })}>{state.visible ? '隐藏辅助线' : '显示辅助线'}</button>
     </div>
-    <p className="instruction">{state.calibrating && state.trackingEnabled ? '拖动覆盖框对齐游戏画面，再调整黄色短线识别框。锁定后鼠标可直接操作游戏。' : state.calibrating ? '拖动覆盖框对齐游戏画面，再将圆心移到钩爪轴心。锁定后鼠标可直接操作游戏。' : '辅助线已锁定，鼠标可穿透。需要调整位置时，点击「重新校准」。'}</p>
+    <p className="instruction">{state.calibrating && state.trackingEnabled ? '拖动覆盖框对齐游戏画面，再调整黄色夹子识别框。空白处可直接点击下方游戏。' : state.calibrating ? '拖动覆盖框对齐游戏画面，再将圆心移到钩爪轴心。空白处可直接点击下方游戏。' : '辅助线已锁定，鼠标可穿透。需要调整位置时，点击「重新校准」。'}</p>
     {(error || state.notice || state.saveError) && <div className="notice" role="status">{[error, state.notice, state.saveError].filter(Boolean).join('\n')}</div>}
 
     <section className="settings-section tracking-section">
@@ -164,10 +182,10 @@ function Panel({ model }: { model: Model }) {
 
         </div>
         <details className="tracking-details"><summary>识别调整</summary>
-          <Field label="深色亮度上限" value={options.darkness} min={40} max={180} onChange={darkness => updateTracking({ darkness })} />
+          <Field label="灰色容差" value={options.colorTolerance} min={10} max={80} onChange={colorTolerance => updateTracking({ colorTolerance })} />
           <label className="checkbox-row"><input type="checkbox" checked={options.showReference} onChange={e => updateTracking({ showReference: e.target.checked })} />保留扇形参考线</label>
         </details>
-        <p className="instruction tracking-help">位置从游戏画面左上角计算，宽高随画面同比缩放。框内尽量避开轮子、支架和钩爪；锁定后框内留空，黄色线沿识别到的短线延长。画面仅在本机处理。</p>
+        <p className="instruction tracking-help">位置从游戏画面左上角计算，宽高随画面同比缩放。完整框住两侧夹爪，避开轮子和其他灰色物体；锁定后框内留空，黄色线沿夹口中垂线向矿区延长。画面仅在本机处理。</p>
       </>}
     </section>
 
@@ -211,6 +229,8 @@ const resizeHandles: [string, ResizeDirection][] = [
 
 function Overlay({ model }: { model: Model }) {
   const { state, patch, setError, error, tracking } = model;
+  const root = useRef<HTMLDivElement>(null);
+  useOverlayInput(root, Boolean(state?.calibrating && state.visible), setError);
   const [size, setSize] = useState({ width: innerWidth, height: innerHeight });
   const dragging = useRef(false);
   const frame = useRef(0);
@@ -230,24 +250,24 @@ function Overlay({ model }: { model: Model }) {
     });
   };
   const nativeAction = (action: Promise<void>) => { void action.catch(e => setError(String(e))); };
-  return <div className={`overlay ${state.calibrating ? 'calibrating' : ''}`}>
+  return <div ref={root} className={`overlay ${state.calibrating ? 'calibrating' : ''}`}>
     <Fan settings={state.settings} {...size} tracking={tracking}
-      hole={state.trackingEnabled && !state.calibrating ? state.tracking.region : null}
+      hole={state.trackingEnabled ? state.tracking.region : null}
       showReference={!state.trackingEnabled || state.tracking.showReference} />
     {state.calibrating && <>
       {state.trackingEnabled && <DetectionRegion region={state.tracking.region} {...size}
         onChange={region => model.command('set_tracking', { options: { region } })} />}
-      <div className="drag-bar" onPointerDown={e => { if (e.button === 0) nativeAction(getCurrentWindow().startDragging()); }}>
+      <div data-overlay-control className="drag-bar" onPointerDown={e => { if (e.button === 0) nativeAction(getCurrentWindow().startDragging()); }}>
         <span className="drag-grip">⠿</span><span>拖动对齐游戏画面 · 拖动边缘缩放</span>
       </div>
-      {!state.trackingEnabled && <button className="origin-handle" aria-label="拖动圆心到钩爪轴心" title="拖动圆心到钩爪轴心"
+      {!state.trackingEnabled && <button data-overlay-control className="origin-handle" aria-label="拖动圆心到钩爪轴心" title="拖动圆心到钩爪轴心"
         style={{ left: state.settings.originX * size.width, top: state.settings.originY * size.height }}
         onPointerDown={e => { if (e.button !== 0) return; dragging.current = true; e.currentTarget.setPointerCapture(e.pointerId); updateOrigin(e); }}
         onPointerMove={e => { if (dragging.current) updateOrigin(e); }}
         onPointerUp={e => { if (dragging.current) { updateOrigin(e); dragging.current = false; } }}
         onLostPointerCapture={() => { dragging.current = false; }}><span /></button>}
-      <div className="overlay-caption">覆盖游戏画面，不包含系统标题栏</div>
-      {resizeHandles.map(([side, direction]) => <div key={side} className={`resize-handle resize-${side}`}
+      <div className="overlay-caption">对齐游戏画面 · 空白处可直接操作游戏</div>
+      {resizeHandles.map(([side, direction]) => <div data-overlay-control key={side} className={`resize-handle resize-${side}`}
         onPointerDown={e => { if (e.button === 0) nativeAction(getCurrentWindow().startResizeDragging(direction)); }} />)}
       {error && <div className="overlay-error">{error}</div>}
     </>}

@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { activeTracking, adjustRegion, dragRegion, type TrackingUpdate } from './tracking';
 
 const state = { trackingEnabled: true, calibrating: false, visible: true, revision: 3 };
-const update: TrackingUpdate = { revision: 3, angle: -40, origin: { x: .48, y: .15 }, confidence: .97, message: '正在跟随短线', capturedAt: 1000 };
+const update: TrackingUpdate = { revision: 3, angle: -40, origin: { x: .48, y: .15 }, confidence: .97, message: '正在跟随夹口中垂线', capturedAt: 1000 };
 
 it('drops directions after a mode, calibration or parameter change', () => {
   expect(activeTracking(state, update, 1100)).toBe(update);
@@ -30,4 +30,16 @@ it('moves and resizes the rectangle within the overlay, independent of fan origi
   expect(adjustRegion(region, { width: 1 }).width).toBe(.6);
   // Pointer deltas are normalized, so equal relative drags at 100% / 150% match.
   expect(dragRegion(region, 'move', 30/600, 20/400)).toEqual(dragRegion(region, 'move', 45/900, 30/600));
+});
+
+it('allows diagnostic frames during calibration but invalidates hidden, disabled and old regions', async () => {
+  const { activePreview } = await import('./tracking');
+  const frame = { revision: 3, capturedAt: 1000, status: 'noMatch' as const, message: '未匹配夹子', frame: null };
+  expect(activePreview({ ...state, calibrating: true } as typeof state, frame, 1100)?.update).toBe(frame);
+  for (const patch of [{ trackingEnabled: false }, { visible: false }, { revision: 4 }]) {
+    expect(activePreview({ ...state, ...patch }, frame, 1100)).toBeNull();
+  }
+  expect(activePreview(state, frame, 800)).toBeNull();
+  expect(activePreview(state, frame, 1100)?.stale).toBe(false);
+  expect(activePreview(state, frame, 2600)?.stale).toBe(true);
 });

@@ -4,7 +4,7 @@ use xcap::image::{imageops, Rgba};
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 6 && args.len() != 7 {
-        eprintln!("Usage: detect_rope IMAGE X Y WIDTH HEIGHT [OUTPUT.png]");
+        eprintln!("Usage: detect_claw IMAGE X Y WIDTH HEIGHT [OUTPUT.png]");
         std::process::exit(2);
     }
     let mut image = xcap::image::open(&args[1]).expect("read image").to_rgba8();
@@ -35,6 +35,14 @@ fn main() {
                         image.put_pixel(x + i, y + j, Rgba([83, 227, 234, 255]));
                     }
                 }
+                for step in 0..=100 {
+                    let t = step as f64 / 100.0;
+                    let px =
+                        (x as f64 + d.jaw_left.x * (1.0 - t) + d.jaw_right.x * t).round() as u32;
+                    let py =
+                        (y as f64 + d.jaw_left.y * (1.0 - t) + d.jaw_right.y * t).round() as u32;
+                    image.put_pixel(px, py, Rgba([255, 110, 110, 255]));
+                }
                 let a = d.angle.to_radians();
                 for step in 0..(image.width() + image.height()) {
                     let px = (x as f64 + d.start.x + a.sin() * step as f64).round() as i32;
@@ -48,7 +56,7 @@ fn main() {
             }
         }
         None => {
-            eprintln!("No unambiguous rope detected");
+            eprintln!("No unambiguous claw detected");
             std::process::exit(1);
         }
     }

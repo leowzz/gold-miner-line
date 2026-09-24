@@ -82,7 +82,7 @@ pub fn request_permission() {
     }
 }
 
-pub fn short_rope(
+pub fn claw_region(
     window: &WebviewWindow,
     panel: &WebviewWindow,
     roi: crate::vision::Region,
@@ -107,11 +107,11 @@ pub fn short_rope(
         width: (bounds.x + (roi.x + roi.width) * bounds.width).ceil() - x,
         height: (bounds.y + (roi.y + roi.height) * bounds.height).ceil() - y,
     };
-    // A control panel covering the rope would produce plausible but wrong edges.
+    // A control panel covering the claw would produce plausible but wrong edges.
     if panel.is_visible().unwrap_or(true) && !panel.is_minimized().unwrap_or(false) {
         let (panel, _) = window_rect(panel)?;
         if region.overlaps(panel) {
-            return Err("请把控制面板移出短线识别区域。".into());
+            return Err("请把控制面板移出夹子识别区域。".into());
         }
     }
     let monitor = Monitor::from_point(center.0.round() as i32, center.1.round() as i32)
@@ -130,7 +130,7 @@ pub fn short_rope(
             region.width as u32,
             region.height as u32,
         )
-        .map_err(|e| format!("无法读取短线画面，请检查屏幕录制权限或重启应用。详情：{e}"))?;
+        .map_err(|e| format!("无法读取夹子画面，请检查屏幕录制权限或重启应用。详情：{e}"))?;
     if before != geometry(window)? {
         return Err("覆盖窗口正在移动，请稍候。".into());
     }

@@ -27,11 +27,11 @@ export function DetectionRegion({ region, width, height, onChange }: {
     drag.current = null;
     onChange(latest.current);
   };
-  return <div className="detection-region" aria-label="短线识别框"
+  return <div data-overlay-control className="detection-region" aria-label="夹子识别框"
     style={{ left: draft.x * width, top: draft.y * height, width: draft.width * width, height: draft.height * height }}
     onPointerDown={begin} onPointerMove={move} onPointerUp={e => { move(e); finish(); }}
     onLostPointerCapture={finish} onPointerCancel={finish}>
-    <span className={`region-label ${draft.y * height < 30 ? 'below' : ''} ${(1 - draft.x) * width < 150 ? 'align-right' : ''}`}>短线识别框 · 拖动移动</span>
-    {handles.map(handle => <span key={handle} data-handle={handle} className={`region-handle region-${handle}`} />)}
+    <span className={`region-label ${draft.y * height < 30 ? 'below' : ''} ${(1 - draft.x) * width < 150 ? 'align-right' : ''}`}>夹子识别框 · 拖动移动</span>
+    {handles.map(handle => <span data-overlay-control key={handle} data-handle={handle} className={`region-handle region-${handle}`} />)}
   </div>;
 }

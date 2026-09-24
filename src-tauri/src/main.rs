@@ -2,6 +2,7 @@
 
 mod capture;
 mod config;
+mod input;
 mod tracking;
 use config::{Bounds, Config, Settings, SettingsPatch};
 use goldline::vision;
@@ -107,9 +108,6 @@ fn apply_mode(
         .get_webview_window("overlay")
         .ok_or("辅助窗口未能加载，请重启应用。")?;
     overlay
-        .set_ignore_cursor_events(!calibrating)
-        .map_err(|e| e.to_string())?;
-    overlay
         .set_focusable(calibrating)
         .map_err(|e| e.to_string())?;
     if visible {
@@ -121,7 +119,10 @@ fn apply_mode(
     let mut inner = model.inner.lock().unwrap();
     inner.snapshot.visible = visible;
     inner.snapshot.calibrating = calibrating;
-    Ok(publish(app, &mut inner))
+    let snapshot = publish(app, &mut inner);
+    drop(inner);
+    input::refresh(app)?;
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -264,6 +265,7 @@ fn main() {
                 }),
                 path,
             });
+            app.manage(Mutex::new(input::Input::default()));
 
             let mut bounds = saved_bounds.unwrap_or(Bounds {
                 x: 80,
@@ -312,6 +314,7 @@ fn main() {
             .inner_size(bounds.width, bounds.height)
             .build()?;
             overlay.set_position(PhysicalPosition::new(bounds.x, bounds.y))?;
+            overlay.set_ignore_cursor_events(true)?;
             overlay.show()?;
             // Keep the controls reachable above the overlay on first launch.
             if let Some(main) = app.get_webview_window("main") {
@@ -334,6 +337,7 @@ fn main() {
             }
             let handle = app.handle().clone();
             tracking::start(handle.clone());
+            input::start(handle.clone());
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(250));
                 flush(&handle, false);
@@ -364,7 +368,8 @@ fn main() {
             reset_settings,
             set_mode,
             recover_overlay,
-            set_tracking
+            set_tracking,
+            input::set_input_regions
         ])
         .build(tauri::generate_context!())
         .expect("无法启动黄金矿工辅助线");

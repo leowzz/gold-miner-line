@@ -235,7 +235,7 @@ mod tests {
         let config = load(&path).unwrap();
         assert_eq!(config.settings.origin_x, 0.481);
         assert_eq!(config.settings.origin_y, 0.129);
-        assert_eq!(config.tracking.darkness, 100.0);
+        assert_eq!(config.tracking.color_tolerance, 24.0);
         assert_eq!(config.tracking.region, crate::vision::Region::default());
     }
 }
