@@ -61,22 +61,40 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 打包
 
-Mac：
+Mac（Universal DMG，同时包含 Apple Silicon 和 Intel）：
 
 ```sh
-pnpm tauri build --bundles app
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+APPLE_SIGNING_IDENTITY=- pnpm tauri build --target universal-apple-darwin --bundles dmg -- --locked
 ```
 
 在原生 Windows x64 环境构建 Windows 10 安装包：
 
 ```powershell
 pnpm install --frozen-lockfile
-pnpm tauri build --bundles nsis
+pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis -- --locked
 ```
 
-安装包位于 `src-tauri/target/release/bundle/nsis/`。安装器在缺少 WebView2 时下载并安装运行时，需要网络连接。安装包未配置代码签名。
+Windows 安装包位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`；Mac DMG 位于 `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`。Windows 安装器在缺少 WebView2 时下载并安装运行时，需要网络连接。
 
-仓库提供 Windows GitHub Actions 工作流，可手动运行，或推送 `v*` 标签触发；生成安装包作为工作流附件，不自动发布 Release。Mac 本地构建不能证明 Windows 10 实机兼容性。
+### GitHub tag 发布
+
+`.github/workflows/build-tag.yml` 仅由推送 `v*` tag 触发。版本格式为 `vX.Y.Z` 或 `vX.Y.Z-rc.N`，tag 必须与 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 及 `src-tauri/Cargo.lock` 中的应用版本一致，且提交属于远端分支。pnpm 锁文件不包含应用版本；CI 用 `--frozen-lockfile` 和 Cargo `--locked` 固定依赖，构建期间不修改版本。
+
+更新并提交版本文件后，以 `v0.1.0` 为例（已存在的 tag 不重复创建或移动）：
+
+```sh
+git push origin HEAD
+TAG_NAME=v0.1.0 node scripts/release.mjs check
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+流程先校验版本、运行发布脚本测试和前端检查，再并行运行两端 Rust 测试与安装包构建。macOS 额外验证 app 的双架构和 ad-hoc 签名。每端上传安装包及 SHA-256 校验文件作为 Actions artifact，保留 30 天。两端全部成功后，验证四个文件及校验和，再创建并发布 [GitHub Release](https://github.com/leowzz/gold-miner-line/releases)。
+
+预发布 tag 会标记为 prerelease，且不设为 Latest。失败后可在 Actions 重跑失败 job；发布步骤保留已有 Release 说明并覆盖同名资产。代码修复需要提交并使用新版本 tag。没有自动更新通道。
+
+Windows 包未配置 Authenticode 签名；macOS 使用 ad-hoc 签名，未做 Developer ID 签名或 Apple 公证，首次打开可能被系统拦截。CI 构建通过不代表 Windows 10 实机、多显示器和屏幕录制权限场景已经验收。
 
 ## 配置与实现
 

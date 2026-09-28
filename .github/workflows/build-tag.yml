@@ -1,0 +1,139 @@
+name: Build tagged app
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release and test frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+      - name: Test release validation
+        run: node --test scripts/test-release.mjs
+      - name: Verify tag and versions
+        id: metadata
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: node scripts/release.mjs check
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-2022
+            targets: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - platform: macos-universal
+            runner: macos-14
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            target: universal-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.platform }}
+      - run: pnpm install --frozen-lockfile
+      - name: Test native code
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build installer
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: pnpm tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+      - name: Verify macOS architectures and signature
+        if: runner.os == 'macOS'
+        run: |
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Goldline.app
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/goldline"
+          codesign --verify --deep --strict "$app"
+      - name: Collect installer and SHA-256
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: node scripts/release.mjs collect ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Goldline-v${{ needs.verify.outputs.version }}-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Goldline-v${{ needs.verify.outputs.version }}-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify complete release assets
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: node scripts/release.mjs verify
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          release_args=(--prerelease="$PRERELEASE")
+          if [[ "$PRERELEASE" == true ]]; then
+            release_args+=(--latest=false)
+          fi
+          if ! gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "Goldline $TAG_NAME" --generate-notes --draft --verify-tag \
+              "${release_args[@]}"
+          fi
+          gh release upload "$TAG_NAME" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${release_args[@]}"
