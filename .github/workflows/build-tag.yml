@@ -55,7 +55,7 @@ jobs:
             runner: macos-14
             targets: aarch64-apple-darwin,x86_64-apple-darwin
             target: universal-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -84,7 +84,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Goldline.app
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/goldline"
+          lipo "$app/Contents/MacOS/goldline" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "$app"
       - name: Collect installer and SHA-256
         env:

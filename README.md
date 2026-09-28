@@ -65,7 +65,7 @@ Mac（Universal DMG，同时包含 Apple Silicon 和 Intel）：
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-APPLE_SIGNING_IDENTITY=- pnpm tauri build --target universal-apple-darwin --bundles dmg -- --locked
+APPLE_SIGNING_IDENTITY=- pnpm tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
 ```
 
 在原生 Windows x64 环境构建 Windows 10 安装包：

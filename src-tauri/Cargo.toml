@@ -1,6 +1,6 @@
 [package]
 name = "goldline"
-version = "0.1.0"
+version = "0.1.1"
 description = "Gold Miner alignment overlay"
 edition = "2021"
 
